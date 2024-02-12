@@ -144,8 +144,8 @@ function Noise2D(x, y) {
 
 // // instancing experiment
 
-const PLANE_SIZE = 10;
-const BLADE_COUNT = 100;
+const PLANE_SIZE = 100;
+const BLADE_COUNT = 100000;
 const BLADE_WIDTH = 0.1;
 const BLADE_HEIGHT = 0.8;
 const BLADE_HEIGHT_VARIATION = 0.6;
@@ -380,11 +380,12 @@ const MID_WIDTH = BLADE_WIDTH * 0.5;
 //             cpos.x += wind * cpos.y * 0.15;
 //             cpos.z += wind * cpos.y * 0.15;
 //             cpos.y *= 1. +  aScale * 0.5;
+//             vec4 wNorm = finalWorld * vec4(norm, 1.0);
 //             gl_Position = viewProjection * finalWorld * vec4(cpos, 1.0);
 
 //             vUV = uv;
 //             vColor = color;
-//             vNormal = norm;
+//             vNormal = wNorm.xyz;
 //             vPosition = gl_Position.xyz;
 //         }
 //     `;
@@ -429,7 +430,7 @@ const MID_WIDTH = BLADE_WIDTH * 0.5;
 //           vec3 BOTTOM_COLOR = vec3(0.83, 1.0, 0.0);
 //           vec3 TOP_COLOR = vec3(0.019, 0.47, 0.14);
 
-//             vec3 normal = texture2D(normalMap, vUV).rgb;
+//             vec3 normal = vNormal;
 //             if(gl_FrontFacing){
 //               normal = normalize(normal);
 //             }else{
@@ -454,11 +455,11 @@ const MID_WIDTH = BLADE_WIDTH * 0.5;
 
 //             float ao = 1.0 - mix(1.0, 0.0, smoothstep(0.0, 1.0, vUV.y));
 
-//             vec3 dirtColor = vec3(0.58, 0.29, 0.0);
+//             // vec3 dirtColor = vec3(0.58, 0.29, 0.0);
 //             vec3 baseColor = mix(TOP_COLOR, BOTTOM_COLOR, vUV.y);
-//             vec3 lightTimesTexture = vec3(1.0, 1.0, 1.0) * baseColor;
+//             // vec3 lightTimesTexture = vec3(1.0, 1.0, 1.0) * baseColor;
 
-//             gl_FragColor = vec4(baseColor * lighting , 1.0);
+//             gl_FragColor = vec4(baseColor * lighting  , 1.0);
 //             gl_FragColor.rgb *= ao;
 
 //             //Tonemapping
@@ -500,6 +501,9 @@ const MID_WIDTH = BLADE_WIDTH * 0.5;
 // const sunDirection = new Vector3(Math.sin(azimuth), Math.sin(elevation), -Math.cos(azimuth));
 // mat.setVector3("sunDirection", sunDirection);
 // mat.setTexture("normalMap", new Texture("/normal.png", scene));
+
+
+
 let mat;
 SceneLoader.ImportMesh(
   "",
@@ -648,6 +652,10 @@ SceneLoader.ImportMesh(
               return 2.2 * n_xyz;
             }
 
+            float exponentialIn(float t) {
+              return t == 0.0 ? t : pow(2.0, 10.0 * (t - 1.0));
+            }
+
             void main(void) {
                 #include<instancesVertex>
                 float waveSize = 10.0f;
@@ -671,16 +679,17 @@ SceneLoader.ImportMesh(
                 cpos = rotationMatrix * cpos;
                 norm = rotationMatrix * norm;
 
-                cpos.x += wind * cpos.y * 0.15;
-                cpos.z += wind * cpos.y * 0.15;
+                // cpos.x += wind * cpos.y * 0.15;
+                cpos.z += wind * (uv.y * uv.y * uv.y) * 1.5;
                 cpos.y *= 1.0 + aScale * 0.5;
                 // cpos.x *= 0.01;
                 vec4 wPos =  finalWorld * vec4(cpos, 1.0);
+                vec4 wNorm = finalWorld * vec4(norm, 0.0);
                 gl_Position = viewProjection * wPos;
 
                 vUV = uv;
                 vColor = color;
-                vNormal = norm;
+                vNormal = wNorm.xyz;
                 vPosition = wPos.xyz;
             }
         `;
@@ -694,6 +703,9 @@ SceneLoader.ImportMesh(
 
             uniform vec3 sunDirection;
             uniform sampler2D normalMap;
+            uniform float uTime;
+            uniform sampler2D grassColorTexture;
+            uniform sampler2D cloudMap;
 
             vec3 ACESFilm(vec3 x){
               float a = 2.51;
@@ -728,6 +740,14 @@ SceneLoader.ImportMesh(
                 //   normal = normalize(-normal);
                 // }
 
+                vec2 globalUV = vPosition.xz + 50.0;
+                vec3 colorSample = texture2D(grassColorTexture, globalUV/100.).rgb;
+                vec3 cloudSample = texture2D(cloudMap, globalUV/100. + uTime * 0.0001).rgb;
+
+                cloudSample.r = remap(cloudSample.r, 0.0, 1.0, 0.4, 1.0);
+                cloudSample.g = remap(cloudSample.g, 0.0, 1.0, 0.4, 1.0);
+                cloudSample.b = remap(cloudSample.b, 0.0, 1.0, 0.4, 1.0);
+
                 vec3 lighting = vec3(0.0);
 
                 vec3 skyColour = vec3(0.0, 0.3, 0.6);
@@ -735,7 +755,14 @@ SceneLoader.ImportMesh(
 
                 vec3 hemi = mix(groundColour, skyColour, remap(normal.y, -1.0, 1.0, 0.0, 1.0));
 
-                vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+                float cosRotation = cos(uTime * 0.001);
+                float sinRotation = sin(uTime * 0.001);
+                mat3 rotationMatrix = mat3(
+                    cosRotation, 0.0, sinRotation,
+                    0.0, 1.0, 0.0,
+                    -sinRotation, 0.0, cosRotation
+                );
+                vec3 lightDir = rotationMatrix * normalize(vec3(1.0, 1.0, 1.0));
                 vec3 lightColour = vec3(1.0, 1.0, 1.0);
                 float dp = max(0.0, dot(lightDir, normal));
 
@@ -756,7 +783,8 @@ SceneLoader.ImportMesh(
 
                 //Gamma correction 1.0/2.2 = 0.4545...
                 gl_FragColor.rgb = pow(gl_FragColor.rgb, vec3(0.4545));
-                gl_FragColor.rgb = normal;
+                // gl_FragColor.rgb = normal;
+                gl_FragColor.rgb = colorSample * ao * cloudSample;
             }
         `;
 
@@ -785,8 +813,9 @@ SceneLoader.ImportMesh(
           "viewProjection",
           "uTime",
           "sunDirection",
+          
         ],
-        samplers: ["normalMap"],
+        samplers: ["normalMap", "grassColorTexture", "cloudMap"],
       }
     );
     mesh.material = mat;
@@ -801,6 +830,8 @@ SceneLoader.ImportMesh(
     );
     mat.setVector3("sunDirection", sunDirection);
     mat.setTexture("normalMap", new Texture("/normal.png", scene));
+    mat.setTexture("grassColorTexture", new Texture("/grass.jpg", scene));
+    mat.setTexture("cloudMap", new Texture("/cloud.jpg", scene));
   },
   (e) => {
     console.log(e);
