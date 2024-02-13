@@ -12,9 +12,14 @@ import "@babylonjs/loaders/glTF";
 import {
   ArcRotateCamera,
   Buffer,
+  Camera,
+  Constants,
   Effect,
+  FreeCamera,
+  GizmoManager,
   Mesh,
   MeshBuilder,
+  RenderTargetTexture,
   SSAORenderingPipeline,
   SceneLoader,
   ShaderMaterial,
@@ -145,7 +150,7 @@ function Noise2D(x, y) {
 // // instancing experiment
 
 const PLANE_SIZE = 100;
-const BLADE_COUNT = 100000;
+const BLADE_COUNT = 1000000;
 const BLADE_WIDTH = 0.1;
 const BLADE_HEIGHT = 0.8;
 const BLADE_HEIGHT_VARIATION = 0.6;
@@ -424,7 +429,7 @@ const MID_WIDTH = BLADE_WIDTH * 0.5;
 
 //         float quadraticIn(float t) {
 //           return t * t;
-//         }        
+//         }
 
 //         void main(void) {
 //           vec3 BOTTOM_COLOR = vec3(0.83, 1.0, 0.0);
@@ -501,8 +506,6 @@ const MID_WIDTH = BLADE_WIDTH * 0.5;
 // const sunDirection = new Vector3(Math.sin(azimuth), Math.sin(elevation), -Math.cos(azimuth));
 // mat.setVector3("sunDirection", sunDirection);
 // mat.setTexture("normalMap", new Texture("/normal.png", scene));
-
-
 
 let mat;
 SceneLoader.ImportMesh(
@@ -664,7 +667,7 @@ SceneLoader.ImportMesh(
 
                 vec3 cpos = position;
 
-                float wind = cnoise(vec3(aOffset.x, aOffset.y, uTime * 0.0005));
+                float wind = cnoise(vec3(aOffset.x, aOffset.y, uTime * 0.0007 * aScale));
 
                 float cosRotation = cos(aRandom * 3.14);
                 float sinRotation = sin(aRandom * 3.14);
@@ -681,7 +684,7 @@ SceneLoader.ImportMesh(
 
                 // cpos.x += wind * cpos.y * 0.15;
                 cpos.z += wind * (uv.y * uv.y * uv.y) * 1.5;
-                cpos.y *= 1.0 + aScale * 0.5;
+                cpos.y *= 1.0 + aScale * 1.5;
                 // cpos.x *= 0.01;
                 vec4 wPos =  finalWorld * vec4(cpos, 1.0);
                 vec4 wNorm = finalWorld * vec4(norm, 0.0);
@@ -740,9 +743,13 @@ SceneLoader.ImportMesh(
                 //   normal = normalize(-normal);
                 // }
 
-                vec2 globalUV = vPosition.xz + 50.0;
-                vec3 colorSample = texture2D(grassColorTexture, globalUV/100.).rgb;
-                vec3 cloudSample = texture2D(cloudMap, globalUV/100. + uTime * 0.0001).rgb;
+                vec2 globalUV = vPosition.xz + ${(PLANE_SIZE / 2).toFixed(2)};
+                vec3 colorSample = texture2D(grassColorTexture, globalUV/${PLANE_SIZE.toFixed(
+                  2
+                )}).rgb;
+                vec3 cloudSample = texture2D(cloudMap, globalUV/${PLANE_SIZE.toFixed(
+                  2
+                )} + uTime * 0.0001).rgb;
 
                 cloudSample.r = remap(cloudSample.r, 0.0, 1.0, 0.4, 1.0);
                 cloudSample.g = remap(cloudSample.g, 0.0, 1.0, 0.4, 1.0);
@@ -813,7 +820,6 @@ SceneLoader.ImportMesh(
           "viewProjection",
           "uTime",
           "sunDirection",
-          
         ],
         samplers: ["normalMap", "grassColorTexture", "cloudMap"],
       }
@@ -832,6 +838,72 @@ SceneLoader.ImportMesh(
     mat.setTexture("normalMap", new Texture("/normal.png", scene));
     mat.setTexture("grassColorTexture", new Texture("/grass.jpg", scene));
     mat.setTexture("cloudMap", new Texture("/cloud.jpg", scene));
+
+    // const sphere = MeshBuilder.CreateSphere(
+    //   "sphere",
+    //   { diameter: 8, segments: 32 },
+    //   scene
+    // );
+
+    // const gizmoManager = new GizmoManager(scene);
+    // gizmoManager.usePointerToAttachGizmos = false;
+    // gizmoManager.positionGizmoEnabled = true;
+    // gizmoManager.rotationGizmoEnabled = false;
+    // gizmoManager.scaleGizmoEnabled = false;
+    // gizmoManager.positionGizmoEnabled = true;
+    // gizmoManager.rotationGizmoEnabled = false;
+    // gizmoManager.scaleGizmoEnabled = false;
+
+    // gizmoManager.attachToMesh(sphere);
+
+    // var depthRenderer = scene.enableDepthRenderer(scene.activeCamera, false);
+    // var depthTex = depthRenderer.getDepthMap();
+    // depthTex.renderList = [sphere, mesh];
+
+    // var _refractionRTT = new RenderTargetTexture(
+    //   "water_refraction",
+    //   { width: 256, height: 256 },
+    //   scene,
+    //   false,
+    //   true
+    // );
+    // _refractionRTT.wrapU = Constants.TEXTURE_MIRROR_ADDRESSMODE;
+    // _refractionRTT.wrapV = Constants.TEXTURE_MIRROR_ADDRESSMODE;
+    // _refractionRTT.ignoreCameraViewport = true;
+    // _refractionRTT.renderList = [sphere, mesh];
+    // _refractionRTT.refreshRate = 1;
+
+    // scene.customRenderTargets.push(_refractionRTT);
+
+    // const plane = MeshBuilder.CreatePlane("plane", { size: 10 }, scene);
+    // plane.material = new StandardMaterial("mat", scene);
+    // plane.material.diffuseTexture = depthRenderer.getDepthMap();
+    // plane.material.backFaceCulling = false;
+    // plane.rotation.x = -Math.PI / 2;
+    // plane.position.y = 10;
+
+    // const size = scene.getEngine().getRenderWidth() / 2; // Adjust size as needed
+    // const orthoCamera = new FreeCamera("orthoCamera", new Vector3(0, 10, 0), scene);
+    // orthoCamera.mode = Camera.ORTHOGRAPHIC_CAMERA;
+    // orthoCamera.orthoLeft = -size/100;
+    // orthoCamera.orthoRight = size/100;
+    // orthoCamera.orthoTop = size/100;
+    // orthoCamera.orthoBottom = -size/100;
+
+    // orthoCamera.setTarget(Vector3.Zero());
+
+    // const depthTexture = new RenderTargetTexture("depthTexture", {width: canvas.width, height: canvas.height}, scene, false, true);
+    // depthTexture.activeCamera = orthoCamera;
+    // depthTexture.renderList = [sphere]
+
+    // // Add the RenderTargetTexture to the scene
+    // scene.customRenderTargets.push(depthTexture);
+
+    // const shadowPlane = MeshBuilder.CreateGround("shadowPlane", {width: 20, height: 20}, scene);
+    // shadowPlane.position.y = -40; 
+    // shadowPlane.material = new StandardMaterial("shadowPlaneMat", scene);
+    // shadowPlane.material.diffuseTexture = depthTexture;
+    // shadowPlane.material.backFaceCulling = false; 
   },
   (e) => {
     console.log(e);
@@ -1197,6 +1269,7 @@ SceneLoader.ImportMesh(
 
 camera.setTarget(new Vector3(0, 1, 0));
 const startTime = Date.now();
+
 engine.runRenderLoop(() => {
   const elapsedTime = Date.now() - startTime;
   mat?.setFloat("uTime", elapsedTime);
