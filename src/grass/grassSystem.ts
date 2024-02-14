@@ -14,6 +14,8 @@ import "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import "@babylonjs/core/Meshes/Builders/boxBuilder";
 import "@babylonjs/core/Meshes/Builders/groundBuilder";
 import "@babylonjs/loaders/glTF";
+import { Inspector } from "@babylonjs/inspector";
+import Stats from "stats.js";
 
 import {
   AbstractMesh,
@@ -33,35 +35,120 @@ import {
   StandardMaterial,
   Texture,
   VertexData,
+  type Nullable,
+  BoundingBox,
+  AxesViewer,
+  UniversalCamera,
 } from "@babylonjs/core";
 import { Noise2D, divideRectangleIntoChunks } from "./util";
 
-const PLANE_SIZE = 100;
-const BLADE_COUNT = 10000;
-const BLADE_WIDTH = 0.1;
-const BLADE_HEIGHT = 0.8;
-const BLADE_HEIGHT_VARIATION = 0.6;
-const MID_WIDTH = BLADE_WIDTH * 0.5;
-const BLADE_PER_CHUNK = 10000;
-const NO_OF_CHUNKS = 4;
+const PLANE_SIZE = 300;
+const BLADE_COUNT = 2000000;
+
+const NO_OF_CHUNKS = 20;
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 const engine = new Engine(canvas);
 const scene = new Scene(engine);
 
 // This creates and positions a free camera (non-mesh)
-const camera = new ArcRotateCamera(
-  "camera",
-  0,
-  0,
-  0,
-  new Vector3(26.4, 32.5, 7.8),
-  scene
-);
-// camera.minZ = 0.1;
-// camera.maxZ = 100000000;
+// const camera = new ArcRotateCamera(
+//   "camera",
+//   0,
+//   0,
+//   0,
+//   new Vector3(26.4, 32.5, 7.8),
+//   scene
+// );
 
-// This targets the camera to scene origin
+const camera = new UniversalCamera("camera", new Vector3(0, 9, 0), scene);
+
+function chunkRectangleCentered(
+  rectWidth: number,
+  rectHeight: number,
+  numberOfChunks: number
+) {
+  const chunks = [];
+  const chunksPerRow = Math.ceil(Math.sqrt(numberOfChunks));
+  const chunksPerColumn = Math.ceil(numberOfChunks / chunksPerRow);
+
+  const chunkWidth = rectWidth / chunksPerRow;
+  const chunkHeight = rectHeight / chunksPerColumn;
+
+  const halfWidth = rectWidth / 2;
+  const halfHeight = rectHeight / 2;
+
+  for (let x = 0; x < chunksPerRow; x++) {
+    for (let y = 0; y < chunksPerColumn; y++) {
+      // Adjust starting positions to be centered around (0, 0)
+      const startX = x * chunkWidth - halfWidth;
+      const startY = y * chunkHeight - halfHeight;
+
+      chunks.push({
+        x: startX,
+        y: startY,
+        width: chunkWidth,
+        height: chunkHeight,
+      });
+    }
+  }
+
+  // Adjust the number of chunks in case it doesn't perfectly fit the original request due to rounding
+  return chunks.slice(0, numberOfChunks);
+}
+
+const positionWithinChunk = (
+  totalBlades: number,
+  chunks: { x: number; y: number; width: number; height: number }[]
+) => {
+  const bladePerChunk = Math.round(totalBlades / chunks.length);
+
+  const bladerPerSide = Math.floor(Math.sqrt(bladePerChunk));
+
+  let chunkData: {
+    dataPoints: number[][];
+    size: { min: { x: number; z: number }; max: { x: number; z: number } };
+  }[] = [];
+
+  chunks.forEach((chunk) => {
+    const gapX = chunk.width / bladerPerSide;
+    const gapY = chunk.height / bladerPerSide;
+    let data = [];
+    let min = { x: Infinity, z: Infinity };
+    let max = { x: -Infinity, z: -Infinity };
+    for (let i = 0; i < bladerPerSide; i++) {
+      const basePointX = chunk.x + i * gapX;
+      const posX = basePointX + (Math.random() * gapX) / 2;
+      if (min.x > posX) {
+        min.x = posX;
+      }
+      if (max.x < posX) {
+        max.x = posX;
+      }
+      for (let j = 0; j < bladerPerSide; j++) {
+        const basePointY = chunk.y + j * gapY;
+        const posY = basePointY + (Math.random() * gapY) / 2;
+        if (min.z > posY) {
+          min.z = posY;
+        }
+        if (max.z < posY) {
+          max.z = posY;
+        }
+        data.push([posX, posY]);
+      }
+    }
+    chunkData.push({ dataPoints: data, size: { min, max } });
+  });
+
+  return chunkData;
+};
+
+const grassData = positionWithinChunk(
+  BLADE_COUNT,
+  chunkRectangleCentered(PLANE_SIZE, PLANE_SIZE, NO_OF_CHUNKS)
+);
+console.log(grassData);
+
 camera.setTarget(Vector3.Zero());
 
 // This attaches the camera to the canvas
@@ -96,34 +183,27 @@ const loadGrassMesh = (path: string, file: string) => {
   });
 };
 
-const res = Promise.all([
-  loadGrassMesh("/", "grassBladeHigh.glb"),
-  loadGrassMesh("/", "grassBladeHigh.glb"),
-  loadGrassMesh("/", "grassBladeHigh.glb"),
-  loadGrassMesh("/", "grassBladeHigh.glb"),
-  loadGrassMesh("/", "grassBladeLow.glb"),
-  loadGrassMesh("/", "grassBladeLow.glb"),
-  loadGrassMesh("/", "grassBladeLow.glb"),
-  loadGrassMesh("/", "grassBladeLow.glb"),
-]);
-
-// class GrassMatrial {
-//   constructor(name: string, scene: Scene) {
-//     const grassTexture = new Texture("/grass.jpg", scene);
-//     const cloudTexture = new Texture("/cloud.jpg", scene);
-//   }
-// }
-
-const fieldChunks = divideRectangleIntoChunks(
-  PLANE_SIZE,
-  PLANE_SIZE,
-  NO_OF_CHUNKS / 2,
-  NO_OF_CHUNKS / 2,
-  80,
-  80
+const ground = MeshBuilder.CreateGround(
+  "ground",
+  { width: PLANE_SIZE, height: PLANE_SIZE },
+  scene
 );
 
-Effect.ShadersStore["ttVertexShader"] = `
+class GrassMaterial {
+  private grassColorTexture: Nullable<Texture> = null;
+  private cloudTexture: Nullable<Texture> = null;
+
+  public material: ShaderMaterial;
+
+  constructor(
+    name: "grass",
+    { planeSize }: { planeSize: number },
+    scene: Scene
+  ) {
+    this.grassColorTexture = new Texture("/grass.jpg", scene);
+    this.cloudTexture = new Texture("/cloud.jpg", scene);
+
+    Effect.ShadersStore[`${name}VertexShader`] = `
             precision highp float;
 
             // Attributes
@@ -260,7 +340,7 @@ Effect.ShadersStore["ttVertexShader"] = `
                 vPosition = wPos.xyz;
             }
         `;
-Effect.ShadersStore["ttFragmentShader"] = `
+    Effect.ShadersStore[`${name}FragmentShader`] = `
             precision highp float;
 
             varying vec2 vUV;
@@ -307,11 +387,11 @@ Effect.ShadersStore["ttFragmentShader"] = `
                 //   normal = normalize(-normal);
                 // }
 
-                vec2 globalUV = vPosition.xz + ${(PLANE_SIZE / 2).toFixed(2)};
-                vec3 colorSample = texture2D(grassColorTexture, globalUV/${PLANE_SIZE.toFixed(
+                vec2 globalUV = vPosition.xz + ${(planeSize / 2).toFixed(2)};
+                vec3 colorSample = texture2D(grassColorTexture, globalUV/${planeSize.toFixed(
                   2
                 )}).rgb;
-                vec3 cloudSample = texture2D(cloudMap, globalUV/${PLANE_SIZE.toFixed(
+                vec3 cloudSample = texture2D(cloudMap, globalUV/${planeSize.toFixed(
                   2
                 )} + uTime * 0.0001).rgb;
 
@@ -359,99 +439,177 @@ Effect.ShadersStore["ttFragmentShader"] = `
             }
         `;
 
-const grassMaterial = new ShaderMaterial(
-  "shader",
-  scene,
-  {
-    vertex: "tt",
-    fragment: "tt",
-  },
-  {
-    attributes: ["position", "normal", "uv", "aRandom", "aOffset", "aScale"],
-    uniforms: [
-      "world",
-      "worldView",
-      "worldViewProjection",
-      "view",
-      "projection",
-      "viewProjection",
-      "uTime",
-      "sunDirection",
-    ],
-    samplers: ["normalMap", "grassColorTexture", "cloudMap"],
+    this.material = new ShaderMaterial(
+      `${name}_shader`,
+      scene,
+      {
+        vertex: name,
+        fragment: name,
+      },
+      {
+        attributes: [
+          "position",
+          "normal",
+          "uv",
+          "aRandom",
+          "aOffset",
+          "aScale",
+        ],
+        uniforms: [
+          "world",
+          "worldView",
+          "worldViewProjection",
+          "view",
+          "projection",
+          "viewProjection",
+          "uTime",
+        ],
+        samplers: ["grassColorTexture", "cloudMap"],
+      }
+    );
+
+    this.material.setTexture("grassColorTexture", this.grassColorTexture);
+    this.material.setTexture("cloudMap", this.cloudTexture);
   }
+
+  setGrassColorTexture(texture: Texture) {
+    this.material.setTexture("grassColorTexture", texture);
+    this.grassColorTexture = texture;
+  }
+
+  setCloudTexture(texture: Texture) {
+    this.material.setTexture("cloudMap", texture);
+    this.cloudTexture = texture;
+  }
+}
+
+// const fieldChunks = divideRectangleIntoChunks(
+//   PLANE_SIZE,
+//   PLANE_SIZE,
+//   NO_OF_CHUNKS / 2,
+//   NO_OF_CHUNKS / 2,
+//   80,
+//   80
+// );
+
+const grassMaterial = new GrassMaterial(
+  "grass",
+  { planeSize: PLANE_SIZE },
+  scene
 );
 
-grassMaterial.setTexture("normalMap", new Texture("/normal.png", scene));
-grassMaterial.setTexture("grassColorTexture", new Texture("/grass.jpg", scene));
-grassMaterial.setTexture("cloudMap", new Texture("/cloud.jpg", scene));
+class GrassTile {
+  private random: Float32Array;
+  private bufferMatrices: Float32Array;
+  private offset: Float32Array;
+  private scale: Float32Array;
+  public mesh: Mesh;
+  private scene: Scene;
+
+  private LODMeshLow: Nullable<Mesh> = null;
+
+  private cameraPos: Vector3 = new Vector3();
+
+  private boundingBox: Nullable<BoundingBox> = null;
+
+  private LODLeveles = new Map<number, Mesh>();
+
+  constructor(params: {
+    random: Float32Array;
+    bufferMatrices: Float32Array;
+    offset: Float32Array;
+    scale: Float32Array;
+    mesh: Mesh;
+    scene: Scene;
+  }) {
+    this.random = params.random;
+    this.bufferMatrices = params.bufferMatrices;
+    this.offset = params.offset;
+    this.scale = params.scale;
+    this.mesh = params.mesh;
+    this.scene = params.scene;
+    this.generateTile();
+  }
+
+  private generateTile() {
+    this.mesh.thinInstanceSetBuffer("aOffset", this.offset, 2);
+    this.mesh.thinInstanceSetBuffer("aRandom", this.random, 1);
+    this.mesh.thinInstanceSetBuffer("aScale", this.scale, 1);
+    this.mesh.thinInstanceSetBuffer("matrix", this.bufferMatrices);
+  }
+
+  private colorCode: Nullable<{ name: string; color: Color3 }> = null;
+  public setColorCode(name: string, color: Color3) {
+    this.colorCode = { name, color };
+    // this.LODMeshLow.material.diffuseColor = color;
+  }
+
+  private checkLOD = () => {
+    if (!this.boundingBox) return;
+    const cameraPositionXZ = this.cameraPos.set(
+      camera.position.x,
+      0,
+      camera.position.z
+    );
+
+    const distance = Vector3.Distance(
+      cameraPositionXZ,
+      this.boundingBox.centerWorld
+    );
+
+    if (distance > 40) {
+      this.LODMeshLow?.setEnabled(true);
+      this.mesh.setEnabled(false);
+    } else {
+      this.LODMeshLow?.setEnabled(false);
+      this.mesh.setEnabled(true);
+    }
+  };
+
+  public setBoundingBox({ min, max }: { min: Vector3; max: Vector3 }) {
+    this.boundingBox = new BoundingBox(min, max);
+    const camera = this.scene.activeCamera;
+    if (!camera) throw new Error("Scene does not have an active camera");
+
+    camera.onViewMatrixChangedObservable.add(this.checkLOD);
+  }
+
+  addLOD(distance: number, mesh: Mesh) {
+    this.LODLeveles.set(distance, mesh);
+    mesh.thinInstanceSetBuffer("aOffset", this.offset, 2);
+    mesh.thinInstanceSetBuffer("aRandom", this.random, 1);
+    mesh.thinInstanceSetBuffer("aScale", this.scale, 1);
+    mesh.thinInstanceSetBuffer("matrix", this.bufferMatrices);
+    // mesh.material = new StandardMaterial("ahs", this.scene);
+    mesh.material = this.mesh.material;
+    // mesh.material.diffuseColor = new Color3(1.0, 0.0, 0.0);
+
+    mesh.material.backFaceCulling = false;
+    this.LODMeshLow = mesh;
+    this.checkLOD();
+  }
+}
+
+const loadLOD1 = (numOfChunks: number) =>
+  new Array(numOfChunks)
+    .fill(null)
+    .map(() => loadGrassMesh("/", "grassBladeHigh.glb"));
+const loadLOD2 = (numOfChunks: number) =>
+  new Array(numOfChunks)
+    .fill(null)
+    .map(() => loadGrassMesh("/", "grassBladeLow2.glb"));
+
+const res = Promise.all([...loadLOD1(NO_OF_CHUNKS), ...loadLOD2(NO_OF_CHUNKS)]);
 
 res.then((meshes) => {
-  //   const grassMeshHigh = meshes[0];
-  //   const grassMeshLow = meshes[1];
+  grassData.forEach(({ dataPoints, size }, index) => {
+    const random = new Float32Array(1 * dataPoints.length);
+    const bufferMatrices = new Float32Array(16 * dataPoints.length);
+    const offset = new Float32Array(2 * dataPoints.length);
+    const scale = new Float32Array(1 * dataPoints.length);
 
-  //   const grassClones = fieldChunks.map((chunk, i) => grassMeshHigh.clone(`grassblade${i}`, null));
-
-  //   for (let j = 0; j < NO_OF_CHUNKS; j++) {
-  //     const BLADE_COUNT_PER_CHUNK = Math.floor(BLADE_COUNT / NO_OF_CHUNKS);
-
-  //     const random = new Float32Array(1 * BLADE_COUNT_PER_CHUNK);
-  //     for (let index = 0; index < random.length; index++) {
-  //       random[index] = 0.5 - Math.random();
-  //     }
-
-  //     const material = new StandardMaterial(`grassMaterial-${j}`, scene);
-  //     material.diffuseColor = colors[j]
-
-  //     const grassMesh = meshes[j];
-
-  //     const bufferMatrices = new Float32Array(16 * BLADE_COUNT_PER_CHUNK);
-  //     const offset = new Float32Array(2 * BLADE_COUNT_PER_CHUNK);
-  //     const scale = new Float32Array(1 * BLADE_COUNT_PER_CHUNK);
-  //     for (let i = 0; i < BLADE_COUNT_PER_CHUNK; i++) {
-  //       const radius = PLANE_SIZE / 2;
-
-  //       const r = radius * Math.sqrt(Math.random());
-  //       const partSize = (2 * Math.PI) / NO_OF_CHUNKS;
-  //       const minAngle = j * partSize;
-  //       const maxAngle = minAngle + partSize;
-  //       const theta = randomIntFromInterval(minAngle, maxAngle);
-  //       console.log(theta, minAngle, maxAngle);
-
-  //       const x = r * Math.cos(theta);
-  //       const y = r * Math.sin(theta);
-
-  //       offset[i] = x / r;
-  //       offset[i + 1] = y / r;
-
-  //       scale[i] = Noise2D(x, y);
-
-  //       const matrix1 = Matrix.Translation(x, 0, y);
-
-  //       // const matrix1 = Matrix.Translation(x, 0, y);
-  //       matrix1.copyToArray(bufferMatrices, i * 16)
-  //     }
-
-  //     if (grassMesh) {
-  //       grassMesh.thinInstanceSetBuffer("aOffset", offset, 2);
-  //       grassMesh.thinInstanceSetBuffer("aRandom", random, 1);
-  //       grassMesh.thinInstanceSetBuffer("aScale", scale, 1);
-  //       grassMesh.thinInstanceSetBuffer("matrix", bufferMatrices);
-  //       grassMesh.material = material;
-  //     }
-  //   }
-
-  //   grassMeshHigh.dispose();
-  //   grassMeshLow.dispose();
-
-  fieldChunks.forEach((chunk, index) => {
-    const random = new Float32Array(1 * chunk.length);
-    const bufferMatrices = new Float32Array(16 * chunk.length);
-    const offset = new Float32Array(2 * chunk.length);
-    const scale = new Float32Array(1 * chunk.length);
-
-    for (let i = 0; i < chunk.length; i++) {
-      const point = chunk[i];
+    for (let i = 0; i < dataPoints.length; i++) {
+      const point = dataPoints[i];
       const x = point ? point[0] || 0 : 0;
       const y = point ? point[1] || 1 : 1;
       offset[i] = x;
@@ -470,38 +628,116 @@ res.then((meshes) => {
 
       matrix.copyToArray(bufferMatrices, i * 16);
     }
-    const grassBladeHigh = meshes[index];
-    const grassBladeLow = meshes[index + NO_OF_CHUNKS];
-    if (grassBladeHigh) {
-    //   grassBladeHigh.addLODLevel(10, grassBladeLow);
-      grassBladeHigh.thinInstanceSetBuffer("aOffset", offset, 2);
-      grassBladeHigh.thinInstanceSetBuffer("aRandom", random, 1);
-      grassBladeHigh.thinInstanceSetBuffer("aScale", scale, 1);
-      grassBladeHigh.thinInstanceSetBuffer("matrix", bufferMatrices);
-      const material = grassMaterial;
-      grassBladeHigh.material = material;
-      grassBladeHigh.material.backFaceCulling = false;
-    }
-    if (grassBladeLow) {
-      grassBladeLow.thinInstanceSetBuffer("aOffset", offset, 2);
-      grassBladeLow.thinInstanceSetBuffer("aRandom", random, 1);
-      grassBladeLow.thinInstanceSetBuffer("aScale", scale, 1);
-      grassBladeLow.thinInstanceSetBuffer("matrix", bufferMatrices);
-      const material = grassMaterial;
-      grassBladeLow.material = material;
-      grassBladeLow.material.backFaceCulling = false;
-      grassBladeLow.material.wireframe = true
-    }
-  });
+    const grassBladeHigh = meshes[index] as Mesh;
 
-  // grassMeshHigh.dispose()
-  // grassMeshLow.dispose()
+    const grassBladeLow = meshes[index + NO_OF_CHUNKS] as Mesh;
+
+    const tile = new GrassTile({
+      random,
+      bufferMatrices,
+      offset,
+      scale,
+      mesh: grassBladeHigh,
+      scene,
+    });
+    tile.mesh.material = grassMaterial.material;
+    tile.mesh.material.backFaceCulling = false;
+    tile.setBoundingBox({
+      min: new Vector3(size.min.x, 0, size.min.z),
+      max: new Vector3(size.max.x, 0, size.max.z),
+    });
+
+    tile.addLOD(50, grassBladeLow);
+
+    tile.setColorCode(
+      `tile-${index}`,
+      new Color3(Math.random(), Math.random(), Math.random())
+    );
+  });
 });
+
+// res.then((meshes) => {
+//   fieldChunks.forEach(({ chunkData, size }, index) => {
+//     const random = new Float32Array(1 * chunkData.length);
+//     const bufferMatrices = new Float32Array(16 * chunkData.length);
+//     const offset = new Float32Array(2 * chunkData.length);
+//     const scale = new Float32Array(1 * chunkData.length);
+
+//     for (let i = 0; i < chunkData.length; i++) {
+//       const point = chunkData[i];
+//       const x = point ? point[0] || 0 : 0;
+//       const y = point ? point[1] || 1 : 1;
+//       offset[i] = x;
+//       offset[i + 1] = y;
+//       scale[i] = Noise2D(x, y);
+
+//       const rotation = new Vector3(0, 0, 0);
+//       const Q = Quaternion.FromEulerAngles(rotation.x, rotation.y, rotation.z);
+//       const matrix = Matrix.Compose(
+//         new Vector3(1, 1, 1),
+//         Q,
+//         new Vector3(x, 0, y)
+//       );
+
+//       random[i] = 0.5 - Math.random();
+
+//       matrix.copyToArray(bufferMatrices, i * 16);
+//     }
+//     const grassBladeHigh = meshes[index] as Mesh;
+
+//     const grassBladeLow = meshes[index + 4] as Mesh;
+
+//     // grassBladeHigh.thinInstanceSetBuffer("aOffset", offset, 2);
+//     // grassBladeHigh.thinInstanceSetBuffer("aRandom", random, 1);
+//     // grassBladeHigh.thinInstanceSetBuffer("aScale", scale, 1);
+//     // grassBladeHigh.thinInstanceSetBuffer("matrix", bufferMatrices);
+
+//     const tile = new GrassTile({
+//       random,
+//       bufferMatrices,
+//       offset,
+//       scale,
+//       mesh: grassBladeHigh,
+//       scene,
+//     });
+//     tile.mesh.material = grassMaterial.material;
+//     tile.mesh.material.backFaceCulling = false;
+//     tile.setBoundingBox({
+//       min: new Vector3(size.min.x, 0, size.min.z),
+//       max: new Vector3(size.max.x, 0, size.max.z),
+//     });
+//     // tile.mesh.material.wieframe = true
+//     tile.addLOD(50, grassBladeLow);
+//     const colors = [
+//       Color3.Red(),
+//       Color3.Green(),
+//       Color3.Blue(),
+//       Color3.Yellow(),
+//     ];
+//     tile.setColorCode(`tile-${index}`, colors[index] as Color3);
+//   });
+// });
 
 const startTime = Date.now();
 
+// const axes = new AxesViewer(scene);
+// axes.update(
+//   new Vector3(0, 4, 0),
+//   new Vector3(10, 0, 0),
+//   new Vector3(0, 10, 0),
+//   new Vector3(0, 0, 10)
+// );
+// Inspector.Show(scene, {});
+
+var stats = new Stats();
+stats.showPanel(1); // 0: fps, 1: ms, 2: mb, 3+: custom
+document.body.appendChild(stats.dom);
+
 engine.runRenderLoop(() => {
+  stats.begin();
   const elapsedTime = Date.now() - startTime;
-  grassMaterial?.setFloat("uTime", elapsedTime);
+  grassMaterial.material?.setFloat("uTime", elapsedTime);
+  camera.position.y = 9;
   scene.render();
+  stats.end();
 });

@@ -88,33 +88,64 @@ export function Noise2D(x: number, y: number) {
   );
 }
 
+export function divideRectangleIntoChunks(
+  width: number,
+  height: number,
+  chunksX: number,
+  chunksY: number,
+  pointsPerChunkX: number,
+  pointsPerChunkY: number
+) {
+  let chunkWidth = width / chunksX;
+  let chunkHeight = height / chunksY;
+  let result = [];
+  const maxOffset =
+    Math.min(chunkWidth / pointsPerChunkX, chunkHeight / pointsPerChunkY) / 2;
 
-export function divideRectangleIntoChunks(width: number, height: number, chunksX: number, chunksY: number, pointsPerChunkX: number, pointsPerChunkY: number) {
-    let chunkWidth = width / chunksX;
-    let chunkHeight = height / chunksY;
-    let result = [];
+  for (let x = 0; x < chunksX; x++) {
+    for (let y = 0; y < chunksY; y++) {
+      let chunk: {
+        chunkData: number[][];
+        size: { min: { x: number; z: number }; max: { x: number; z: number } };
+      } = {
+        chunkData: [],
+        size: {
+          min: { x: Infinity, z: Infinity },
+          max: { x: -Infinity, z: -Infinity },
+        },
+      };
 
-    const maxOffset = Math.min(chunkWidth/pointsPerChunkX, chunkHeight/pointsPerChunkY)/2
+      for (let px = 0; px < pointsPerChunkX; px++) {
+        for (let py = 0; py < pointsPerChunkY; py++) {
+          let basePointX =
+            width / 2 - x * chunkWidth + (px * chunkWidth) / pointsPerChunkX;
+          let basePointY =
+            height / 2 - y * chunkHeight + (py * chunkHeight) / pointsPerChunkY;
+          let offsetX = (Math.random() * 2 - 1) * maxOffset; // Random offset between -maxOffset and +maxOffset
+          let offsetY = (Math.random() * 2 - 1) * maxOffset; // Random offset between -maxOffset and +maxOffset
 
-    for (let x = 0; x < chunksX; x++) {
-        for (let y = 0; y < chunksY; y++) {
-            let chunk = [];
-            for (let px = 0; px < pointsPerChunkX; px++) {
-                for (let py = 0; py < pointsPerChunkY; py++) {
-                    let basePointX = x * chunkWidth + (px * chunkWidth) / pointsPerChunkX;
-                    let basePointY = y * chunkHeight + (py * chunkHeight) / pointsPerChunkY;
-                    let offsetX = (Math.random() * 2 - 1) * maxOffset; // Random offset between -maxOffset and +maxOffset
-                    let offsetY = (Math.random() * 2 - 1) * maxOffset; // Random offset between -maxOffset and +maxOffset
+          let pointX = basePointX + offsetX;
+          let pointY = basePointY + offsetY;
 
-                    let pointX = basePointX+offsetX 
-                    let pointY = basePointY+offsetY 
-
-                    chunk.push([pointX, pointY]);
-                }
-            }
-            result.push(chunk);
+          //   chunk.push([pointX, pointY]);
+          chunk.chunkData.push([pointX, pointY]);
+          if (pointX < chunk.size.min.x) {
+            chunk.size.min.x = pointX;
+          }
+          if (pointX > chunk.size.max.x) {
+            chunk.size.max.x = pointX;
+          }
+          if (pointY < chunk.size.min.z) {
+            chunk.size.min.z = pointY;
+          }
+          if (pointY > chunk.size.max.z) {
+            chunk.size.max.z = pointY;
+          }
         }
+      }
+      result.push(chunk);
     }
+  }
 
-    return result;
+  return result;
 }
