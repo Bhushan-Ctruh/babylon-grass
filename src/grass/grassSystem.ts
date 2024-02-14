@@ -14,38 +14,31 @@ import "@babylonjs/core/Meshes/Builders/sphereBuilder";
 import "@babylonjs/core/Meshes/Builders/boxBuilder";
 import "@babylonjs/core/Meshes/Builders/groundBuilder";
 import "@babylonjs/loaders/glTF";
-import { Inspector } from "@babylonjs/inspector";
 import Stats from "stats.js";
+import MersenneTwister from "mersenne-twister";
 
 import {
   AbstractMesh,
-  ArcRotateCamera,
-  Buffer,
-  Camera,
-  Constants,
   Effect,
-  FreeCamera,
-  GizmoManager,
   Mesh,
   MeshBuilder,
-  RenderTargetTexture,
-  SSAORenderingPipeline,
   SceneLoader,
   ShaderMaterial,
-  StandardMaterial,
   Texture,
-  VertexData,
   type Nullable,
   BoundingBox,
-  AxesViewer,
   UniversalCamera,
+  ToHalfFloat,
+  StandardMaterial,
+  VertexBuffer,
+  VertexData,
 } from "@babylonjs/core";
-import { Noise2D, divideRectangleIntoChunks } from "./util";
+import { Noise2D, chunkRectangleCentered, positionWithinChunk } from "./util";
 
-const PLANE_SIZE = 300;
-const BLADE_COUNT = 2000000;
+const PLANE_SIZE = 60;
+const BLADE_COUNT = 40000;
 
-const NO_OF_CHUNKS = 20;
+const NO_OF_CHUNKS = 12;
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 const engine = new Engine(canvas);
@@ -62,86 +55,6 @@ const scene = new Scene(engine);
 // );
 
 const camera = new UniversalCamera("camera", new Vector3(0, 9, 0), scene);
-
-function chunkRectangleCentered(
-  rectWidth: number,
-  rectHeight: number,
-  numberOfChunks: number
-) {
-  const chunks = [];
-  const chunksPerRow = Math.ceil(Math.sqrt(numberOfChunks));
-  const chunksPerColumn = Math.ceil(numberOfChunks / chunksPerRow);
-
-  const chunkWidth = rectWidth / chunksPerRow;
-  const chunkHeight = rectHeight / chunksPerColumn;
-
-  const halfWidth = rectWidth / 2;
-  const halfHeight = rectHeight / 2;
-
-  for (let x = 0; x < chunksPerRow; x++) {
-    for (let y = 0; y < chunksPerColumn; y++) {
-      // Adjust starting positions to be centered around (0, 0)
-      const startX = x * chunkWidth - halfWidth;
-      const startY = y * chunkHeight - halfHeight;
-
-      chunks.push({
-        x: startX,
-        y: startY,
-        width: chunkWidth,
-        height: chunkHeight,
-      });
-    }
-  }
-
-  // Adjust the number of chunks in case it doesn't perfectly fit the original request due to rounding
-  return chunks.slice(0, numberOfChunks);
-}
-
-const positionWithinChunk = (
-  totalBlades: number,
-  chunks: { x: number; y: number; width: number; height: number }[]
-) => {
-  const bladePerChunk = Math.round(totalBlades / chunks.length);
-
-  const bladerPerSide = Math.floor(Math.sqrt(bladePerChunk));
-
-  let chunkData: {
-    dataPoints: number[][];
-    size: { min: { x: number; z: number }; max: { x: number; z: number } };
-  }[] = [];
-
-  chunks.forEach((chunk) => {
-    const gapX = chunk.width / bladerPerSide;
-    const gapY = chunk.height / bladerPerSide;
-    let data = [];
-    let min = { x: Infinity, z: Infinity };
-    let max = { x: -Infinity, z: -Infinity };
-    for (let i = 0; i < bladerPerSide; i++) {
-      const basePointX = chunk.x + i * gapX;
-      const posX = basePointX + (Math.random() * gapX) / 2;
-      if (min.x > posX) {
-        min.x = posX;
-      }
-      if (max.x < posX) {
-        max.x = posX;
-      }
-      for (let j = 0; j < bladerPerSide; j++) {
-        const basePointY = chunk.y + j * gapY;
-        const posY = basePointY + (Math.random() * gapY) / 2;
-        if (min.z > posY) {
-          min.z = posY;
-        }
-        if (max.z < posY) {
-          max.z = posY;
-        }
-        data.push([posX, posY]);
-      }
-    }
-    chunkData.push({ dataPoints: data, size: { min, max } });
-  });
-
-  return chunkData;
-};
 
 const grassData = positionWithinChunk(
   BLADE_COUNT,
@@ -656,80 +569,272 @@ res.then((meshes) => {
   });
 });
 
-// res.then((meshes) => {
-//   fieldChunks.forEach(({ chunkData, size }, index) => {
-//     const random = new Float32Array(1 * chunkData.length);
-//     const bufferMatrices = new Float32Array(16 * chunkData.length);
-//     const offset = new Float32Array(2 * chunkData.length);
-//     const scale = new Float32Array(1 * chunkData.length);
+const NUM_BUGS = 8;
+const NUM_SEGMENTS = 2;
+const NUM_VERTICES = (NUM_SEGMENTS + 1) * 2;
+const BUG_SPAWN_RANGE = 5.0;
+const BUG_MAX_DIST = 10.0;
 
-//     for (let i = 0; i < chunkData.length; i++) {
-//       const point = chunkData[i];
-//       const x = point ? point[0] || 0 : 0;
-//       const y = point ? point[1] || 1 : 1;
-//       offset[i] = x;
-//       offset[i + 1] = y;
-//       scale[i] = Noise2D(x, y);
+const rng = new MersenneTwister(1);
 
-//       const rotation = new Vector3(0, 0, 0);
-//       const Q = Quaternion.FromEulerAngles(rotation.x, rotation.y, rotation.z);
-//       const matrix = Matrix.Compose(
-//         new Vector3(1, 1, 1),
-//         Q,
-//         new Vector3(x, 0, y)
-//       );
+console.log(rng);
 
-//       random[i] = 0.5 - Math.random();
+const offsets = new Float32Array(NUM_BUGS * 3);
+const bufferMatrices = new Float32Array(NUM_BUGS * 16);
+for (let i = 0; i < NUM_BUGS; ++i) {
+  offsets[i * 3 + 0] = ToHalfFloat(
+    (rng.random() * 2.0 - 1.0) * (BUG_SPAWN_RANGE / 2)
+  );
+  offsets[i * 3 + 1] = ToHalfFloat(rng.random() * 1.0 + 2.0);
+  offsets[i * 3 + 2] = ToHalfFloat(
+    (rng.random() * 2.0 - 1.0) * (BUG_SPAWN_RANGE / 2)
+  );
 
-//       matrix.copyToArray(bufferMatrices, i * 16);
-//     }
-//     const grassBladeHigh = meshes[index] as Mesh;
+  const borderSize = PLANE_SIZE * 0.85
 
-//     const grassBladeLow = meshes[index + 4] as Mesh;
+  const rotation = new Vector3(0, 0, 0);
+  const Q = Quaternion.FromEulerAngles(rotation.x, rotation.y, rotation.z);
+  const matrix = Matrix.Compose(
+    new Vector3(1, 1, 1),
+    Q,
+    new Vector3(Math.random() * borderSize - borderSize/2, 10, Math.random() * borderSize - borderSize/2 )
+  );
 
-//     // grassBladeHigh.thinInstanceSetBuffer("aOffset", offset, 2);
-//     // grassBladeHigh.thinInstanceSetBuffer("aRandom", random, 1);
-//     // grassBladeHigh.thinInstanceSetBuffer("aScale", scale, 1);
-//     // grassBladeHigh.thinInstanceSetBuffer("matrix", bufferMatrices);
+  matrix.copyToArray(bufferMatrices, i * 16);
+}
 
-//     const tile = new GrassTile({
-//       random,
-//       bufferMatrices,
-//       offset,
-//       scale,
-//       mesh: grassBladeHigh,
-//       scene,
-//     });
-//     tile.mesh.material = grassMaterial.material;
-//     tile.mesh.material.backFaceCulling = false;
-//     tile.setBoundingBox({
-//       min: new Vector3(size.min.x, 0, size.min.z),
-//       max: new Vector3(size.max.x, 0, size.max.z),
-//     });
-//     // tile.mesh.material.wieframe = true
-//     tile.addLOD(50, grassBladeLow);
-//     const colors = [
-//       Color3.Red(),
-//       Color3.Green(),
-//       Color3.Blue(),
-//       Color3.Yellow(),
-//     ];
-//     tile.setColorCode(`tile-${index}`, colors[index] as Color3);
-//   });
-// });
+const moth = MeshBuilder.CreateGround(
+  "moth-geom",
+  { width: 1, height: 1, subdivisionsX: 2, subdivisionsY: 1 },
+  scene
+);
+
+const mothVertices = moth.getVerticesData(VertexBuffer.PositionKind, true, true)
+const mothUvs = moth.getVerticesData(VertexBuffer.UVKind, true, true)
+const mothNormals = moth.getVerticesData(VertexBuffer.NormalKind)
+const mothIndices = moth.getIndices(true, true)
+
+const mothMesh = new Mesh("moth-mesh", scene)
+const vertexdata = new VertexData()
+vertexdata.positions = mothVertices
+vertexdata.uvs = mothUvs 
+vertexdata.indices = mothIndices
+vertexdata.normals = mothNormals
+
+moth.dispose();
+
+vertexdata.applyToMesh(mothMesh)
+
+mothMesh.thinInstanceSetBuffer("matrix", bufferMatrices);
+mothMesh.thinInstanceSetBuffer("aOffset", offsets, 3);
+
+// const mothMat = new StandardMaterial("moth-mat", scene);
+// mothMat.backFaceCulling = false;
+// mothMat.wireframe = true;
+// moth.material = mothMat;
+
+Effect.ShadersStore[`mothVertexShader`] = `
+            precision highp float;
+
+            // Attributes
+            attribute vec3 position;
+            attribute vec2 uv;
+            attribute vec3 normal;
+            attribute vec3 aOffset;
+
+            // Uniforms
+            uniform mat4 viewProjection;
+            uniform float uTime;
+
+            // Varying
+            varying vec2 vUV;
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+
+            #include<instancesDeclaration>
+
+            uvec4 murmurHash42(uvec2 src) {
+                const uint M = 0x5bd1e995u;
+                uvec4 h = uvec4(1190494759u, 2147483647u, 3559788179u, 179424673u);
+                src *= M; src ^= src>>24u; src *= M;
+                h *= M; h ^= src.x; h *= M; h ^= src.y;
+                h ^= h>>13u; h *= M; h ^= h>>15u;
+                return h;
+            }
+            
+            // 4 outputs, 2 inputs
+            vec4 hash42(vec2 src) {
+                uvec4 h = murmurHash42(floatBitsToUint(src));
+                return uintBitsToFloat(h & 0x007fffffu | 0x3f800000u) - 1.0;
+            }
+
+            mat4 rotationMatrix(vec3 axis, float angle) {
+                axis = normalize(axis);
+                float s = sin(angle);
+                float c = cos(angle);
+                float oc = 1.0 - c;
+                
+                return mat4(oc * axis.x * axis.x + c,           oc * axis.x * axis.y - axis.z * s,  oc * axis.z * axis.x + axis.y * s,  0.0,
+                            oc * axis.x * axis.y + axis.z * s,  oc * axis.y * axis.y + c,           oc * axis.y * axis.z - axis.x * s,  0.0,
+                            oc * axis.z * axis.x - axis.y * s,  oc * axis.y * axis.z + axis.x * s,  oc * axis.z * axis.z + c,           0.0,
+                            0.0,                                0.0,                                0.0,                                1.0);
+            }
+
+            mat4 rotateY(float angle){
+                return rotationMatrix(vec3(0., 1., 0.), angle);
+            }
+
+            float bnoise( in float x ){
+                float i = floor(x);
+                float f = fract(x);
+                float s = sign(fract(x/2.0)-0.5);
+                float k = fract(i*.1731);
+                return s*f*(f-1.0)*((16.0*k-4.0)*f*(f-1.0)-1.0);
+            }
+
+            
+            void main(void) {
+                #include<instancesVertex>
+
+                vec3 transformed = position;    
+
+                vec4 bugHashVal = hash42(aOffset.xz);
+
+                float BUG_SCALE = mix(0.55, 1.0, bugHashVal.z);
+                transformed *= BUG_SCALE;
+
+                const float FLAP_SPEED = 20.0;
+                float flapTimeSample = uTime * FLAP_SPEED + bugHashVal.x * 100.0;
+                transformed.y += mix(0.0, sin(flapTimeSample), abs(position.x)) * BUG_SCALE;
+                transformed.x *= abs(cos(flapTimeSample));
+
+                float TIME_PERIOD = 20.0;
+                float repeatingTime = TIME_PERIOD * 0.5 - abs(mod(uTime, TIME_PERIOD) - TIME_PERIOD * 0.5);
+
+                float height = bnoise(uTime * 1.5  + bugHashVal.x * 100.0);
+
+                float loopTime = uTime * 0.002 + bugHashVal.x * 123.23;
+                float loopSize = 5.0;
+
+                vec3 bugsOffset = vec3(sin(loopTime) * loopSize,  height, cos(loopTime) * loopSize) + aOffset;
+
+                vec2 translatedPosition = transformed.xz - vec2(5.0, 5.0);
+
+                float cosAngle = cos(-loopTime + 3.14 / 2.0);
+                float sinAngle = sin(-loopTime + 3.14 / 2.0);
+                vec2 rotatedPosition = vec2(
+                    translatedPosition.x * cosAngle - translatedPosition.y * sinAngle,
+                    translatedPosition.x * sinAngle + translatedPosition.y * cosAngle
+                );
+
+                vec2 finalPosition = rotatedPosition + vec2(5.0, 5.0);
+
+                transformed.x += finalPosition.x;
+                transformed.z += finalPosition.y;
+    
+                // transformed += bugsOffset * 0.0001;
+
+
+                vec4 wPos =  finalWorld * vec4(transformed, 1.0);
+                vec4 wNorm = finalWorld * vec4(normal, 0.0);
+                gl_Position = viewProjection * wPos;
+
+                vUV = uv;
+                vNormal = wNorm.xyz;
+                vPosition = wPos.xyz;
+            }
+        `;
+Effect.ShadersStore[`mothFragmentShader`] = `
+            precision highp float;
+
+            varying vec2 vUV;
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+
+            uniform float uTime;
+            uniform sampler2D diffuseTexture;
+
+            vec3 ACESFilm(vec3 x){
+              float a = 2.51;
+              float b = 0.03;
+              float c = 2.43;
+              float d = 0.59;
+              float e = 0.14;
+              return clamp((x*(a*x+b))/(x*(c*x+d)+e), 0.0, 1.0);
+            }
+
+            float inverseLerp(float v, float minValue, float maxValue) {
+              return (v - minValue) / (maxValue - minValue);
+            }
+
+            float remap(float v, float inMin, float inMax, float outMin, float outMax) {
+              float t = inverseLerp(v, inMin, inMax);
+              return mix(outMin, outMax, t);
+            }
+
+            float exponentialIn(float t) {
+              return t == 0.0 ? t : pow(2.0, 10.0 * (t - 1.0));
+            }
+
+            void main(void) {
+
+                vec3 normal = vNormal ;
+            
+                vec4 diffuse = texture2D(diffuseTexture,vUV );
+
+                gl_FragColor = diffuse;
+
+                //Tonemapping
+                // gl_FragColor.rgb = ACESFilm(gl_FragColor.rgb);
+
+                //Gamma correction 1.0/2.2 = 0.4545...
+                // gl_FragColor.rgb = pow(gl_FragColor.rgb, vec3(0.4545));
+                // gl_FragColor.rgb = normal;
+            }
+        `;
+
+const material = new ShaderMaterial(
+  `moth_shader`,
+  scene,
+  {
+    vertex: "moth",
+    fragment: "moth",
+  },
+  {
+    attributes: ["position", "normal", "uv", "aOffset"],
+    uniforms: [
+      "world",
+      "worldView",
+      "worldViewProjection",
+      "view",
+      "projection",
+      "viewProjection",
+      "uTime",
+    ],
+    samplers: ["diffuseTexture"],
+    needAlphaBlending: true
+  }
+);
+material.backFaceCulling = false
+mothMesh.material = material
+
+const mothTexture = new Texture("/moth.png", scene)
+material.setTexture("diffuseTexture", mothTexture)
+
+
+// const geo = new THREE.InstancedBufferGeometry();
+//     geo.instanceCount = NUM_BUGS;
+//     geo.setAttribute('position', plane.attributes.position);
+//     geo.setAttribute('uv', plane.attributes.uv);
+//     geo.setAttribute('normal', plane.attributes.normal);
+//     geo.setAttribute('offset', new InstancedFloat16BufferAttribute(offsets, 3));
+//     geo.setIndex(plane.index);
+//     geo.rotateX(-Math.PI / 2);
+//     geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), BUG_SPAWN_RANGE);
 
 const startTime = Date.now();
 
-// const axes = new AxesViewer(scene);
-// axes.update(
-//   new Vector3(0, 4, 0),
-//   new Vector3(10, 0, 0),
-//   new Vector3(0, 10, 0),
-//   new Vector3(0, 0, 10)
-// );
-// Inspector.Show(scene, {});
-
-var stats = new Stats();
+const stats = new Stats();
 stats.showPanel(1); // 0: fps, 1: ms, 2: mb, 3+: custom
 document.body.appendChild(stats.dom);
 
@@ -737,7 +842,8 @@ engine.runRenderLoop(() => {
   stats.begin();
   const elapsedTime = Date.now() - startTime;
   grassMaterial.material?.setFloat("uTime", elapsedTime);
-  camera.position.y = 9;
+  material.setFloat("uTime", elapsedTime)
+  //   camera.position.y = 9;
   scene.render();
   stats.end();
 });
